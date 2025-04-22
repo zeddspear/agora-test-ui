@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import AgoraRTC, { IAgoraRTCRemoteUser, ILocalTrack } from "agora-rtc-sdk-ng";
+import { Fastboard, createFastboard, type FastboardApp } from "@netless/fastboard-react/full";
+
 
 const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
@@ -10,13 +12,14 @@ export default function App() {
   const [token, setToken] = useState("");
   const [channel, setChannel] = useState("");
   const [role, setRole] = useState<Role>("student");
+  const [whiteboardUUID, setWhiteboardUUID] = useState("");
+  const [whiteboardRoomToken, setWhiteboardRoomToken] = useState("");
 
   const [joined, setJoined] = useState(false);
   const [micOn, setMicOn] = useState(false);
   const [camOn, setCamOn] = useState(false);
-  const [remoteUser, setRemoteUser] = useState<IAgoraRTCRemoteUser | null>(
-    null
-  );
+  const [remoteUser, setRemoteUser] = useState<IAgoraRTCRemoteUser | null>(null);
+  const [fastboard, setFastboard] = useState<FastboardApp | null>(null);
 
   const localAudioTrack = useRef<ILocalTrack | null>(null);
   const localVideoTrack = useRef<ILocalTrack | null>(null);
@@ -25,42 +28,58 @@ export default function App() {
   const remoteContainer = useRef<HTMLDivElement | null>(null);
 
   const handleJoin = async () => {
-    if (!uid || !token || !channel) {
-      alert("Please fill in all fields");
-      return;
-    }
-
-    await client.join(import.meta.env.VITE_AGORA_APP_ID, channel, token, uid);
-
-    localAudioTrack.current = await AgoraRTC.createMicrophoneAudioTrack();
-    localVideoTrack.current = await AgoraRTC.createCameraVideoTrack();
-
-    await client.publish([localAudioTrack.current, localVideoTrack.current]);
-
-    // if (localContainer.current && localVideoTrack.current) {
-    //   localVideoTrack.current.play(localContainer.current);
-    // }
-
-    setTimeout(() => {
-      if (localVideoTrack.current && localContainer.current) {
-        localVideoTrack.current.play(localContainer.current);
+    try {
+      if (!uid || !token || !channel || !whiteboardUUID || !whiteboardRoomToken) {
+        alert("Please fill in all fields");
+        return;
       }
-    }, 500);
 
-    console.log("Local video track:", localVideoTrack.current);
-    console.log("Local container:", localContainer.current);
+      // Join Agora RTC
+      await client.join(import.meta.env.VITE_AGORA_APP_ID, channel, token, uid);
+      localAudioTrack.current = await AgoraRTC.createMicrophoneAudioTrack();
+      localVideoTrack.current = await AgoraRTC.createCameraVideoTrack();
+      await client.publish([localAudioTrack.current, localVideoTrack.current]);
 
-    setMicOn(true);
-    setCamOn(true);
-    setJoined(true);
+      setTimeout(() => {
+        if (localVideoTrack.current && localContainer.current) {
+          localVideoTrack.current.play(localContainer.current);
+        }
+      }, 500);
+
+      setMicOn(true);
+      setCamOn(true);
+      setJoined(true);
+
+
+
+      // Create Fastboard
+      const fastboardApp = await createFastboard({
+        sdkConfig: {
+          appIdentifier: import.meta.env.VITE_WHITEBOARD_APP_ID,
+          region: 'us-sv',
+        },
+        joinRoom: {
+          uid,
+          uuid: whiteboardUUID,
+          roomToken: whiteboardRoomToken,
+        },
+      });
+
+      setFastboard(fastboardApp);
+    } catch (err:any) {
+      console.error("Join or publish failed:", err.message);
+      alert("Failed to join. Please try again.");
+    }
   };
 
   const handleLeave = async () => {
     localAudioTrack.current?.close();
     localVideoTrack.current?.close();
     await client.leave();
+    fastboard?.room?.disconnect();
     setJoined(false);
     setRemoteUser(null);
+    setFastboard(null);
   };
 
   const toggleMic = async () => {
@@ -86,32 +105,16 @@ export default function App() {
   useEffect(() => {
     client.on("user-published", async (user, mediaType) => {
       await client.subscribe(user, mediaType);
-
       setRemoteUser(user);
 
-      if (mediaType === "video") {
-        // Wait for video track to exist
-        if (remoteContainer.current) {
-          const playerId = `remote-player-${user.uid}`;
-          let player = document.getElementById(playerId);
-
-          if (!player) {
-            player = document.createElement("div");
-            player.id = playerId;
-            player.className = "w-64 h-48 bg-black mb-2";
-            remoteContainer.current.innerHTML = "";
-            remoteContainer.current.append(player);
-          }
-
-          // Ensure video track is ready
-          if (user.videoTrack) {
-            try {
-              user.videoTrack.play(player as HTMLElement);
-            } catch (err) {
-              console.warn("Error playing remote video:", err);
-            }
-          }
+      if (mediaType === "video" && remoteContainer.current) {
+        if (!document.getElementById(`remote-player-${user.uid}`)) {
+          const remoteDiv = document.createElement("div");
+          remoteDiv.id = `remote-player-${user.uid}`;
+          remoteDiv.className = "w-64 h-48 bg-black mb-2";
+          remoteContainer.current.append(remoteDiv);
         }
+        user.videoTrack?.play(`remote-player-${user.uid}`);
       }
 
       if (mediaType === "audio") {
@@ -133,13 +136,23 @@ export default function App() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Agora Video Meeting</h1>
+      <h1 className="text-2xl font-bold mb-4">Agora Video Meeting + Fastboard</h1>
 
       {!joined ? (
         <div className="space-y-4 mb-6">
           <TextInput label="UID" value={uid} onChange={setUid} />
           <TextInput label="Token" value={token} onChange={setToken} />
           <TextInput label="Channel" value={channel} onChange={setChannel} />
+          <TextInput
+            label="Whiteboard UUID"
+            value={whiteboardUUID}
+            onChange={setWhiteboardUUID}
+          />
+          <TextInput
+            label="Whiteboard Room Token"
+            value={whiteboardRoomToken}
+            onChange={setWhiteboardRoomToken}
+          />
           <SelectInput label="Role" value={role} onChange={setRole} />
           <button
             onClick={handleJoin}
@@ -158,17 +171,13 @@ export default function App() {
           <div className="flex gap-4 mt-4">
             <button
               onClick={toggleMic}
-              className={`px-4 py-2 rounded ${
-                micOn ? "bg-red-500" : "bg-blue-500"
-              } text-white`}
+              className={`px-4 py-2 rounded ${micOn ? "bg-red-500" : "bg-blue-500"} text-white`}
             >
               {micOn ? "Mute Mic" : "Unmute Mic"}
             </button>
             <button
               onClick={toggleCam}
-              className={`px-4 py-2 rounded ${
-                camOn ? "bg-red-500" : "bg-blue-500"
-              } text-white`}
+              className={`px-4 py-2 rounded ${camOn ? "bg-red-500" : "bg-blue-500"} text-white`}
             >
               {camOn ? "Turn Off Cam" : "Turn On Cam"}
             </button>
@@ -180,7 +189,7 @@ export default function App() {
             </button>
           </div>
 
-          {/* Uncomment for Tutor remote control */}
+            {/* Uncomment for Tutor remote control */}
           {/*
           {role === "tutor" && remoteUser && (
             <div className="mt-6">
@@ -214,21 +223,23 @@ export default function App() {
             </div>
           )}
           */}
+
+
+          <div className="mt-6">
+            <h3 className="text-lg font-semibold mb-2">Whiteboard</h3>
+            <div className="w-full h-[400px] bg-white border rounded shadow">
+              {fastboard && <Fastboard app={fastboard} />}
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function TextInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (val: string) => void;
-}) {
+// Reuse your utility components unchanged
+
+function TextInput({ label, value, onChange }: { label: string; value: string; onChange: (val: string) => void }) {
   return (
     <div className="flex flex-col">
       <label className="font-medium">{label}</label>
@@ -242,15 +253,7 @@ function TextInput({
   );
 }
 
-function SelectInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (val: "student" | "tutor") => void;
-}) {
+function SelectInput({ label, value, onChange }: { label: string; value: string; onChange: (val: "student" | "tutor") => void }) {
   return (
     <div className="flex flex-col">
       <label className="font-medium">{label}</label>
@@ -266,13 +269,7 @@ function SelectInput({
   );
 }
 
-function VideoStream({
-  title,
-  refObj,
-}: {
-  title: string;
-  refObj: React.RefObject<HTMLDivElement | null>;
-}) {
+function VideoStream({ title, refObj }: { title: string; refObj: React.RefObject<HTMLDivElement | null> }) {
   return (
     <div>
       <h2 className="font-semibold mb-1">{title}</h2>
@@ -280,3 +277,7 @@ function VideoStream({
     </div>
   );
 }
+
+
+
+
